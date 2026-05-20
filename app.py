@@ -52,6 +52,7 @@ st.markdown("""
     }
     .report-box strong { color: #1a1a1a; }
     .report-box em { color: #333; }
+    video { max-height: 280px !important; }
     .st-emotion-cache-1y4p8pa { padding: 2rem 1rem; }
 </style>
 """, unsafe_allow_html=True)
@@ -112,10 +113,10 @@ def main():
             tmp.write(uploaded_file.getbuffer())
             video_path = tmp.name
 
-        # Smaller video preview
+        # Compact video preview
         col_vid, _ = st.columns([1, 2])
         with col_vid:
-            st.video(video_path, format="video/mp4")
+            st.video(video_path, format="video/mp4", start_time=0)
 
         # Analysis button
         col1, col2, col3 = st.columns([1, 2, 1])
