@@ -17,6 +17,7 @@ from metrics import RunningMetricsCalculator, RunningMetrics
 from visualizer import RunningFormVisualizer
 from analyzer import AIRunningCoach
 from llm_client import create_llm_client
+from quality_check import VideoQualityChecker, print_quality_report
 
 
 def analyze_video(video_path: str,
@@ -59,6 +60,16 @@ def analyze_video(video_path: str,
     with open(landmarks_path, "w") as f:
         json.dump(seq.to_dict(), f, indent=2)
     print(f"   Raw landmarks saved to: {landmarks_path}")
+
+    # Quality check: is the video suitable for analysis?
+    print("\n🎥 Step 1.5/4: Checking video quality...")
+    quality_checker = VideoQualityChecker()
+    quality_report = quality_checker.check(seq)
+    print(print_quality_report(quality_report))
+
+    if not quality_report.passed:
+        print("⚠️  分析将继续，但部分指标可能不准确。")
+        print("   建议按照上方拍摄指南重新录制视频。")
 
     # Step 2: Compute running metrics
     print("\n📊 Step 2/4: Computing running metrics...")
