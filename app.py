@@ -24,6 +24,8 @@ st.set_page_config(page_title="🏃 Running Form Analyzer", page_icon="🏃",
 OUTPUT_DIR = Path(__file__).parent / "output"
 OUTPUT_DIR.mkdir(exist_ok=True)
 
+st.markdown("""<style>video{max-height:200px!important;width:100%!important;border-radius:8px}</style>""", unsafe_allow_html=True)
+
 # ── Markdown → HTML ──
 def _md_to_html(text: str) -> str:
     html = text
