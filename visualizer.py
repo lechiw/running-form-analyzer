@@ -196,8 +196,12 @@ class RunningFormVisualizer:
         import os
         os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
 
-        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+        # Try H.264 for browser compatibility; fall back to mp4v
+        fourcc = cv2.VideoWriter_fourcc(*'avc1')
         out = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
+        if not out.isOpened():
+            fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+            out = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
 
         # Build a frame-to-metrics lookup
         frame_metrics_map = {}

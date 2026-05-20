@@ -4,13 +4,8 @@ Streamlit-based interface for video upload, analysis, and results.
 """
 
 import streamlit as st
-import sys
-import os
-import tempfile
-import json
-import base64
+import sys, os, tempfile, json, re, shutil, subprocess
 from pathlib import Path
-from datetime import datetime
 
 project_root = Path(__file__).parent
 sys.path.insert(0, str(project_root))
@@ -26,54 +21,44 @@ from fatigue_analyzer import FatigueAnalyzer, format_fatigue_report
 st.set_page_config(page_title="🏃 Running Form Analyzer", page_icon="🏃",
                    layout="wide", initial_sidebar_state="expanded")
 
-# ── CSS ────────────────────────────────────────
-st.markdown("""
-<style>
-    .stProgress > div > div > div > div { background-color: #00cc66; }
-    .report-box {
-        background-color: #f8f9fa; color: #1a1a1a;
-        border-radius: 8px; padding: 20px;
-        border: 1px solid #dee2e6;
-        font-family: -apple-system,'Microsoft YaHei',monospace;
-        white-space: pre-wrap; line-height: 1.6; font-size: 14px;
-    }
-    .report-box strong { color: #1a1a1a; }
-    .report-box em { color: #333; }
-    video { max-height: 400px !important; width: 100% !important; border-radius: 8px; }
-    .st-emotion-cache-1y4p8pa { padding: 2rem 1rem; }
-</style>
-""", unsafe_allow_html=True)
-
-# ── Helpers ────────────────────────────────────
 OUTPUT_DIR = Path(__file__).parent / "output"
 OUTPUT_DIR.mkdir(exist_ok=True)
 
+# ── Markdown → HTML ──
+def _md_to_html(text: str) -> str:
+    html = text
+    html = re.sub(r'^### (.+)$', r'<h3>\1</h3>', html, flags=re.M)
+    html = re.sub(r'^## (.+)$', r'<h2>\1</h2>', html, flags=re.M)
+    html = re.sub(r'^# (.+)$', r'<h1>\1</h1>', html, flags=re.M)
+    html = re.sub(r'\*\*(.+?)\*\*', r'<strong>\1</strong>', html)
+    html = re.sub(r'\*(.+?)\*', r'<em>\1</em>', html)
+    html = re.sub(r'^- (.+)$', r'<li>\1</li>', html, flags=re.M)
+    html = re.sub(r'^(\d+)\.\s+(.+)$', r'<li>\2</li>', html, flags=re.M)
+    return html
+
 def _generate_html_report(text: str) -> str:
-    """Wrap plain-text report into a styled HTML page."""
-    html_text = text.replace("\n", "<br>")
+    body = _md_to_html(text)
     return f"""<!DOCTYPE html>
 <html lang="zh-CN">
 <head><meta charset="utf-8"><title>跑姿分析报告</title>
 <style>
-body {{ font-family: -apple-system,'Microsoft YaHei',sans-serif; max-width: 800px; margin: 40px auto; padding: 0 20px; background: #fff; color: #1a1a1a; line-height: 1.8; }}
-pre {{ background: #f8f9fa; padding: 20px; border-radius: 8px; border: 1px solid #dee2e6; white-space: pre-wrap; word-wrap: break-word; font-family: inherit; font-size: 14px; }}
-</style></head><body><pre>{html_text}</pre></body></html>"""
+body {{ font-family: -apple-system,'Microsoft YaHei',sans-serif; max-width: 800px; margin: 40px auto; padding: 20px; background: #fff; color: #1a1a1a; line-height: 1.8; }}
+h1,h2,h3 {{ color: #1a1a1a; }}
+h2 {{ border-bottom: 2px solid #00cc66; padding-bottom: 4px; }}
+ul,ol {{ padding-left: 20px; }}
+li {{ margin: 4px 0; }}
+</style></head><body>{body}</body></html>"""
 
 
-def main():
-    st.title("🏃 Running Form Analyzer")
-    st.markdown("上传跑步视频，AI 自动分析跑姿并生成报告")
-
-    # ── Sidebar ──
+# ── Sidebar ─────────────────────────────────────
+def _sidebar():
     with st.sidebar:
         st.header("⚙️ 分析设置")
-        stride = st.slider("采样步长", 1, 5, 2, help="每 N 帧处理一帧")
-        max_frames = st.number_input("最大帧数", 0, 3000, 0, step=100,
-                                     help="0 = 全部")
+        stride = st.slider("采样步长", 1, 5, 2)
+        max_frames = st.number_input("最大帧数", 0, 3000, 0, step=100, help="0=全部")
         render_video = st.checkbox("🎬 生成可视化视频", True)
         do_fatigue = st.checkbox("🔄 疲劳对比分析", True)
-        llm_provider = st.selectbox("AI 报告引擎",
-                                    ["deepseek", "openai", "template"], 0)
+        llm_provider = st.selectbox("AI 报告引擎", ["deepseek", "openai", "template"], 0)
         st.divider()
         st.markdown("### 📸 拍摄指南")
         st.info("侧面拍摄 · 手机固定 · 横屏 · 全身入画 · 浅色紧身衣")
@@ -83,225 +68,194 @@ def main():
                 st.success(f"✅ {llm_provider} API 已连接")
             else:
                 st.warning("⚠️ API 未配置，使用模板报告")
-
-    # ── File upload ──
-    uploaded_file = st.file_uploader("选择跑步视频",
-        type=["mp4", "mov", "avi", "mkv", "webm"])
-
-    # ── Init session state ──
-    if "results" not in st.session_state:
-        st.session_state.results = None
-    if "video_uploaded" not in st.session_state:
-        st.session_state.video_uploaded = None
-    if "video_path" not in st.session_state:
-        st.session_state.video_path = None
-
-    if uploaded_file is not None:
-        # Save uploaded file (only when new file)
-        if (st.session_state.video_uploaded != uploaded_file.name or
-            st.session_state.results is None):
-            video_ext = Path(uploaded_file.name).suffix
-            with tempfile.NamedTemporaryFile(delete=False, suffix=video_ext) as tmp:
-                tmp.write(uploaded_file.getbuffer())
-                st.session_state.video_path = tmp.name
-            st.session_state.video_uploaded = uploaded_file.name
-            st.session_state.results = None  # Clear old results on new upload
-
-        # Preview video (centered)
-        _, col_vid, _ = st.columns([1, 2, 1])
-        with col_vid:
-            st.video(st.session_state.video_path, format="video/mp4")
-
-        # Analyze button
-        _, col_btn, _ = st.columns([1, 2, 1])
-        with col_btn:
-            analyze_btn = st.button("🚀 开始分析", type="primary",
-                                     use_container_width=True)
-
-        if analyze_btn:
-            with st.spinner("分析中，请稍候..."):
-                st.session_state.results = _run_analysis(
-                    video_path=st.session_state.video_path,
-                    stride=stride,
-                    max_frames=max_frames if max_frames > 0 else None,
-                    render=render_video,
-                    do_fatigue=do_fatigue,
-                    llm_provider=llm_provider if llm_provider != "template" else None,
-                )
-
-    # ── Display results from session state ──
-    if st.session_state.results:
-        _display_results(st.session_state.results)
+    return stride, max_frames, render_video, do_fatigue, llm_provider
 
 
-def _run_analysis(video_path: str, stride: int, max_frames, render: bool,
-                  do_fatigue: bool, llm_provider: str) -> dict:
-    """Run the full analysis pipeline."""
+# ── Analysis pipeline ──────────────────────────
+def _run_analysis(video_path, stride, max_frames, render, do_fatigue, llm_provider):
     progress = st.progress(0, text="初始化...")
-    results = {}
+    res = {}
 
-    # Step 1
     progress.progress(10, text="📐 提取骨架...")
     extractor = PoseExtractor(model_complexity=1)
     seq = extractor.extract_from_video(video_path, max_frames=max_frames, stride=stride)
-    if len(seq.landmarks_seq) == 0:
+    if not seq.landmarks_seq:
         st.error("❌ 未检测到人体骨架")
         return {"error": "No pose detected"}
-    results["total_frames"] = len(seq.landmarks_seq)
+    res["total_frames"] = len(seq.landmarks_seq)
 
-    # Step 1.5
     progress.progress(30, text="🎥 检查拍摄质量...")
     qc = VideoQualityChecker()
     qr = qc.check(seq)
-    results["quality"] = {
-        "passed": qr.passed, "score": qr.score, "summary": qr.summary,
-        "issues": qr.issues, "tips": qr.tips, "guide": qr.shooting_guide,
-    }
+    res["quality"] = {"passed": qr.passed, "score": qr.score, "summary": qr.summary,
+                      "issues": qr.issues, "tips": qr.tips, "guide": qr.shooting_guide}
 
-    # Step 2
     progress.progress(50, text="📊 计算跑姿指标...")
     calc = RunningMetricsCalculator()
     metrics = calc.compute(seq)
     scoring = calc.get_scoring(metrics)
-    results["metrics"] = metrics.summary()
-    results["scoring"] = scoring
+    res["metrics"] = metrics.summary()
+    res["scoring"] = scoring
 
-    # Step 3: Render video
     output_video = None
     if render:
         progress.progress(65, text="🎬 渲染可视化视频...")
-        out_path = str(OUTPUT_DIR / "analysis_result.mp4")
-        v = RunningFormVisualizer()
-        v.render_video(video_path, out_path, seq, metrics)
-        output_video = out_path
-    results["video_output"] = output_video
+        raw_path = str(OUTPUT_DIR / "_raw.mp4")
+        RunningFormVisualizer().render_video(video_path, raw_path, seq, metrics)
+        # Re-encode to H.264 for browser
+        browser_path = str(OUTPUT_DIR / "analysis_preview.mp4")
+        subprocess.run(["ffmpeg", "-y", "-i", raw_path, "-c:v", "libx264",
+                        "-preset", "fast", "-pix_fmt", "yuv420p",
+                        "-movflags", "+faststart", browser_path],
+                       capture_output=True, timeout=120)
+        if os.path.exists(browser_path) and os.path.getsize(browser_path) > 1000:
+            output_video = browser_path
+        else:
+            output_video = raw_path
+    res["video_output"] = output_video
 
-    # Step 3.5
     if do_fatigue:
         progress.progress(80, text="🔄 疲劳分析...")
-        fa = FatigueAnalyzer()
-        fr = fa.analyze(seq)
-        results["fatigue"] = fr.to_dict()
+        fr = FatigueAnalyzer().analyze(seq)
+        res["fatigue"] = fr.to_dict()
 
-    # Step 4
     progress.progress(90, text="📝 生成分析报告...")
     provider = llm_provider or os.environ.get("LLM_PROVIDER", "deepseek")
     client = create_llm_client(provider=provider, auto_fallback=True)
-    coach = AIRunningCoach(llm_api_func=client, fatigue_report=results.get("fatigue"))
+    coach = AIRunningCoach(llm_api_func=client, fatigue_report=res.get("fatigue"))
     report = coach.generate_report(metrics, scoring)
-    results["report"] = report
-    results["llm_active"] = client is not None
+    res["report"] = report
+    res["llm_active"] = client is not None
 
-    # Save HTML report
-    html = _generate_html_report(report)
-    report_html = OUTPUT_DIR / "analysis_report.html"
-    report_html.write_text(html, encoding="utf-8")
-    results["report_html_path"] = str(report_html)
+    html_path = str(OUTPUT_DIR / "analysis_report.html")
+    with open(html_path, "w", encoding="utf-8") as f:
+        f.write(_generate_html_report(report))
+    res["report_html_path"] = html_path
 
     progress.progress(100, text="✅ 分析完成！")
-    return results
+    return res
 
 
-def _display_results(r: dict):
-    """Display analysis results (uses session_state, won't disappear)."""
+# ── Display results ────────────────────────────
+def _display(r):
     if "error" in r:
         return
-
     st.divider()
     st.header("📊 分析结果")
-
-    # Summary cards
     a, b, c = st.columns(3)
     a.metric("处理帧数", r.get("total_frames", "N/A"))
     score = r.get("scoring", {}).get("overall_score")
     b.metric("🏆 跑姿评分", f"{score:.0f}/100" if score is not None else "N/A")
     c.metric("AI 报告", "✅ 已启用" if r.get("llm_active") else "📝 模板")
 
-    # 1. Quality check
     q = r.get("quality", {})
     if q:
-        with st.expander("🎥 拍摄质量检查",
-                          expanded=not q.get("passed", True)):
-            if q.get("passed"):
-                st.success(q.get("summary", "通过"))
-            else:
-                st.warning(q.get("summary", "有问题"))
-            st.write(f"评分：{q.get('score', 0)}/100")
-            for issue in (q.get("issues") or []):
-                st.markdown(f"- ❌ {issue}")
-            for tip in (q.get("tips") or []):
-                st.markdown(f"- 💡 {tip}")
+        with st.expander("🎥 拍摄质量检查", expanded=not q.get("passed", True)):
+            (st.success if q.get("passed") else st.warning)(q.get("summary"))
+            st.write(f"评分：{q.get('score',0)}/100")
+            for i in (q.get("issues") or []): st.markdown(f"- ❌ {i}")
+            for t in (q.get("tips") or []): st.markdown(f"- 💡 {t}")
 
-    # 2. Metrics
-    metrics = r.get("metrics", {})
-    with st.expander("📊 跑姿指标", expanded=True):
-        if metrics:
+    m = r.get("metrics", {})
+    if m:
+        with st.expander("📊 跑姿指标", expanded=True):
             cols = st.columns(3)
-            items = [
-                ("步频", f"{metrics.get('cadence_spm','N/A')} spm"),
-                ("躯干前倾角", f"{metrics.get('trunk_lean_deg','N/A')}°"),
-                ("垂直振幅", f"{metrics.get('vertical_oscillation_cm','N/A')} cm"),
-                ("手臂对称性", f"{metrics.get('arm_symmetry_score','N/A')}/100"),
-                ("触地距离", f"{metrics.get('foot_strike_distance_cm','N/A')} cm"),
-                ("着地方式", metrics.get("foot_strike_type","N/A")),
-            ]
-            for i, (label, val) in enumerate(items):
-                cols[i % 3].metric(label, val)
-
+            for i, (label, key, unit) in enumerate([
+                ("步频","cadence_spm","spm"), ("躯干前倾","trunk_lean_deg","°"),
+                ("垂直振幅","vertical_oscillation_cm","cm"), ("手臂对称","arm_symmetry_score","/100"),
+                ("触地距离","foot_strike_distance_cm","cm"), ("着地方式","foot_strike_type","")]):
+                v = m.get(key, "N/A")
+                cols[i % 3].metric(label, f"{v} {unit}" if unit else str(v))
             details = r.get("scoring", {}).get("details", {})
             if details:
                 st.markdown("**各维度评分：**")
                 sc = st.columns(len(details))
-                name_map = {"cadence":"步频","trunk_lean":"躯干",
-                            "arm_symmetry":"手臂","vertical_oscillation":"振幅",
-                            "foot_strike":"触地"}
+                nm = {"cadence":"步频","trunk_lean":"躯干","arm_symmetry":"手臂",
+                      "vertical_oscillation":"振幅","foot_strike":"触地"}
                 for i, (k, v) in enumerate(details.items()):
-                    sc[i].metric(name_map.get(k, k), v)
+                    sc[i].metric(nm.get(k, k), v)
 
-    # 3. Fatigue
-    fatigue = r.get("fatigue")
-    if fatigue:
+    ft = r.get("fatigue")
+    if ft:
         with st.expander("🔄 疲劳分析", expanded=True):
-            lv = {"normal":"✅ 正常","mild":"⚡ 轻度",
-                  "moderate":"⚠️ 中度","severe":"🔴 重度"}
-            level = lv.get(fatigue.get("fatigue_level",""), fatigue.get("fatigue_level"))
-            st.metric("疲劳等级", f"{level}（{fatigue.get('fatigue_score',0):.0f}/100）")
+            lv = {"normal":"✅ 正常","mild":"⚡ 轻度","moderate":"⚠️ 中度","severe":"🔴 重度"}
+            st.metric("疲劳等级", f"{lv.get(ft.get('fatigue_level',''),'?')}（{ft.get('fatigue_score',0):.0f}/100）")
             rows = []
-            for d in (fatigue.get("deltas") or []):
+            for d in (ft.get("deltas") or []):
                 if d.get("baseline") is not None or d.get("fatigue") is not None:
                     ch = d.get("change")
                     cs = f"{'▼' if ch and ch<0 else '▲'} {abs(ch):.1f}" if ch else "N/A"
                     rows.append({"指标":d["metric"],"前段":d.get("baseline","N/A"),
                                  "后段":d.get("fatigue","N/A"),"变化":cs})
-            if rows:
-                st.table(rows)
+            if rows: st.table(rows)
 
-    # 4. Report (inline preview + HTML download)
-    report_text = r.get("report", "")
-    if report_text:
+    report = r.get("report", "")
+    if report:
         with st.expander("📝 分析报告", expanded=True):
-            st.markdown(f'<div class="report-box">{report_text}</div>',
-                       unsafe_allow_html=True)
-            html_path = r.get("report_html_path")
-            if html_path and os.path.exists(html_path):
-                with open(html_path, "r", encoding="utf-8") as f:
-                    st.download_button("📥 下载 HTML 报告",
-                        data=f.read(),
-                        file_name="running_analysis_report.html",
-                        mime="text/html",
+            st.markdown(report)  # renders markdown properly
+            hp = r.get("report_html_path")
+            if hp and os.path.exists(hp):
+                with open(hp, encoding="utf-8") as f:
+                    st.download_button("📥 下载 HTML 报告", data=f.read(),
+                        file_name="running_analysis_report.html", mime="text/html",
                         use_container_width=True)
 
-    # 5. Rendered video preview + download
-    video_path = r.get("video_output")
-    if video_path and os.path.exists(video_path):
+    vp = r.get("video_output")
+    if vp and os.path.exists(vp):
         with st.expander("🎬 可视化视频", expanded=True):
-            st.video(video_path, format="video/mp4")
-            with open(video_path, "rb") as f:
-                st.download_button("📥 下载可视化视频",
-                    data=f.read(),
-                    file_name="running_analysis_annotated.mp4",
-                    mime="video/mp4",
+            st.video(vp, format="video/mp4")
+            with open(vp, "rb") as f:
+                st.download_button("📥 下载可视化视频", data=f.read(),
+                    file_name="running_analysis_annotated.mp4", mime="video/mp4",
                     use_container_width=True)
+
+
+# ── Main ───────────────────────────────────────
+def main():
+    st.title("🏃 Running Form Analyzer")
+    st.markdown("上传跑步视频，AI 自动分析跑姿并生成报告")
+
+    stride, max_frames, render_video, do_fatigue, llm_provider = _sidebar()
+
+    if "results" not in st.session_state:
+        st.session_state.results = None
+    if "video_file" not in st.session_state:
+        st.session_state.video_file = None
+
+    uploaded = st.file_uploader("选择跑步视频",
+                                type=["mp4", "mov", "avi", "mkv", "webm"])
+
+    if uploaded is not None:
+        # Save uploaded file to stable location
+        ext = Path(uploaded.name).suffix
+        stable = str(OUTPUT_DIR / f"upload{ext}")
+        with open(stable, "wb") as f:
+            f.write(uploaded.getbuffer())
+        st.session_state.video_file = stable
+
+        if st.session_state.results is None:
+            st.session_state.results = None  # fresh upload, clear old
+
+        # Centered preview
+        _, col, _ = st.columns([1, 2, 1])
+        with col:
+            if os.path.exists(stable):
+                st.video(stable)
+
+        # Analyze button
+        _, btn, _ = st.columns([1, 2, 1])
+        with btn:
+            if st.button("🚀 开始分析", type="primary", use_container_width=True):
+                with st.spinner("分析中，请稍候..."):
+                    st.session_state.results = _run_analysis(
+                        stable, stride,
+                        max_frames if max_frames > 0 else None,
+                        render_video, do_fatigue,
+                        llm_provider if llm_provider != "template" else None,
+                    )
+
+    if st.session_state.results:
+        _display(st.session_state.results)
 
 
 if __name__ == "__main__":
