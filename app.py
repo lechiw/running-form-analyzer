@@ -40,14 +40,18 @@ st.markdown("""
     .metric-normal { color: #ffaa00; font-weight: bold; }
     .stProgress > div > div > div > div { background-color: #00cc66; }
     .report-box {
-        background-color: #1e1e1e;
+        background-color: #f8f9fa;
+        color: #1a1a1a;
         border-radius: 8px;
         padding: 20px;
-        border: 1px solid #333;
-        font-family: monospace;
+        border: 1px solid #dee2e6;
+        font-family: -apple-system, 'Microsoft YaHei', monospace;
         white-space: pre-wrap;
         line-height: 1.6;
+        font-size: 14px;
     }
+    .report-box strong { color: #1a1a1a; }
+    .report-box em { color: #333; }
     .st-emotion-cache-1y4p8pa { padding: 2rem 1rem; }
 </style>
 """, unsafe_allow_html=True)
