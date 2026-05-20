@@ -150,6 +150,23 @@ def _display(r):
     b.metric("🏆 跑姿评分", f"{score:.0f}/100" if score is not None else "N/A")
     c.metric("AI 报告", "✅ 已启用" if r.get("llm_active") else "📝 模板")
 
+    # Download buttons at top
+    report_html = r.get("report_html_path")
+    video_out = r.get("video_output")
+    dl_cols = st.columns(2)
+    with dl_cols[0]:
+        if report_html and os.path.exists(report_html):
+            with open(report_html, encoding="utf-8") as f:
+                st.download_button("📥 下载 HTML 报告", data=f.read(),
+                    file_name="running_analysis_report.html", mime="text/html",
+                    use_container_width=True)
+    with dl_cols[1]:
+        if video_out and os.path.exists(video_out):
+            with open(video_out, "rb") as f:
+                st.download_button("📥 下载可视化视频", data=f.read(),
+                    file_name="running_analysis_annotated.mp4", mime="video/mp4",
+                    use_container_width=True)
+
     q = r.get("quality", {})
     if q:
         with st.expander("🎥 拍摄质量检查", expanded=not q.get("passed", True)):
@@ -194,22 +211,12 @@ def _display(r):
     report = r.get("report", "")
     if report:
         with st.expander("📝 分析报告", expanded=True):
-            st.markdown(report)  # renders markdown properly
-            hp = r.get("report_html_path")
-            if hp and os.path.exists(hp):
-                with open(hp, encoding="utf-8") as f:
-                    st.download_button("📥 下载 HTML 报告", data=f.read(),
-                        file_name="running_analysis_report.html", mime="text/html",
-                        use_container_width=True)
+            st.markdown(report)
 
     vp = r.get("video_output")
     if vp and os.path.exists(vp):
         with st.expander("🎬 可视化视频", expanded=True):
             st.video(vp, format="video/mp4")
-            with open(vp, "rb") as f:
-                st.download_button("📥 下载可视化视频", data=f.read(),
-                    file_name="running_analysis_annotated.mp4", mime="video/mp4",
-                    use_container_width=True)
 
 
 # ── Main ───────────────────────────────────────
