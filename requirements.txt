@@ -5,6 +5,9 @@ mediapipe>=0.10.9,<0.10.20
 opencv-python>=4.8.0
 numpy>=1.24.0
 
+# Web UI (optional):
+# streamlit
+
 # LLM report (optional - for AI-powered analysis reports):
 # Set DEEPSEEK_API_KEY or OPENAI_API_KEY env var to activate.
 # The built-in HTTP client uses only the Python standard library.
