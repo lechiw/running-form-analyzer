@@ -4,7 +4,8 @@ Handles video upload, sync/async analysis, and result retrieval.
 """
 import os, uuid, json, subprocess, re
 from pathlib import Path
-from fastapi import FastAPI, UploadFile, File, HTTPException
+from fastapi import FastAPI, UploadFile, File, HTTPException, Request
+from fastapi.responses import JSONResponse
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -48,6 +49,15 @@ ALLOWED = {".mp4", ".mov", ".avi", ".mkv", ".webm"}
 app = FastAPI(title="Running Form Analyzer API", version="2.0.0")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True,
                    allow_methods=["*"], allow_headers=["*"])
+
+# Return JSON for all errors (not HTML)
+@app.exception_handler(Exception)
+async def json_error_handler(request: Request, exc: Exception):
+    import traceback
+    return JSONResponse(
+        status_code=getattr(exc, 'status_code', 500),
+        content={"error": str(exc), "detail": traceback.format_exc()[-500:]},
+    )
 
 
 # ── Routes ─────────────────────────────────────

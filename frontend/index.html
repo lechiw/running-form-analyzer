@@ -182,16 +182,23 @@ async function startAnalysis() {
   formData.append('render', document.getElementById('optRender').checked ? 'true' : 'false');
   formData.append('do_fatigue', document.getElementById('optFatigue').checked ? 'true' : 'false');
 
-  // Show progress
   document.getElementById('resultsCard').classList.add('hidden');
   document.getElementById('progressCard').classList.remove('hidden');
   document.getElementById('btnAnalyze').disabled = true;
 
   try {
     const resp = await fetch(`${API}/api/upload`, {method:'POST', body:formData});
+    if (!resp.ok) {
+      const err = await resp.json().catch(()=>({error:'Unknown error'}));
+      throw new Error(err.error || err.detail || `HTTP ${resp.status}`);
+    }
     const data = await resp.json();
-    currentTaskId = data.task_id;
-    pollProgress(data.task_id);
+    if (data.result) {
+      showResults(data.result);
+    } else {
+      currentTaskId = data.task_id;
+      pollProgress(data.task_id);
+    }
   } catch(e) {
     showError('上传失败: ' + e.message);
   }
@@ -200,6 +207,10 @@ async function startAnalysis() {
 async function pollProgress(taskId) {
   try {
     const resp = await fetch(`${API}/api/status/${taskId}`);
+    if (!resp.ok) {
+      setTimeout(() => pollProgress(taskId), 2000);
+      return;
+    }
     const data = await resp.json();
 
     document.getElementById('progressFill').style.width = (data.progress || 0) + '%';
