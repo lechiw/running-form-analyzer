@@ -112,7 +112,10 @@ def main():
             tmp.write(uploaded_file.getbuffer())
             video_path = tmp.name
 
-        st.video(video_path, format="video/mp4")
+        # Smaller video preview
+        col_vid, _ = st.columns([1, 2])
+        with col_vid:
+            st.video(video_path, format="video/mp4")
 
         # Analysis button
         col1, col2, col3 = st.columns([1, 2, 1])
