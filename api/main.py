@@ -1,155 +1,122 @@
 """
 FastAPI application for Running Form Analyzer.
-Handles video upload, async task management, and result retrieval.
+Handles video upload, sync/async analysis, and result retrieval.
 """
-import os
-import uuid
-import json
-import shutil
+import os, uuid, json, subprocess, re
 from pathlib import Path
-from typing import Optional
-from contextlib import asynccontextmanager
-
 from fastapi import FastAPI, UploadFile, File, HTTPException
-from fastapi.responses import JSONResponse, FileResponse, HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
 
-from worker.celery_app import celery_app
-from worker.tasks import analyze_video_task
+# Celery is optional
+try:
+    from worker.celery_app import celery_app
+    from worker.tasks import analyze_video_task
+    # Check if Redis is actually reachable
+    import socket
+    s = socket.socket()
+    s.settimeout(1)
+    s.connect(('localhost', 6379))
+    s.close()
+    CELERY_OK = True
+except Exception:
+    CELERY_OK = False
+    celery_app = None
+    print("  ⚠️  Redis/Celery unavailable, using sync mode")
 
-_default_storage = str(Path(__file__).parent.parent / "data")
-STORAGE_DIR = Path(os.environ.get("STORAGE_DIR", _default_storage))
-VIDEOS_DIR = STORAGE_DIR / "videos"
-RESULTS_DIR = STORAGE_DIR / "results"
-REPORTS_DIR = STORAGE_DIR / "reports"
-FRONTEND_DIR = Path(__file__).parent.parent / "frontend"
+# Core modules (for sync fallback)
+from core.pose_extractor import PoseExtractor
+from core.metrics import RunningMetricsCalculator
+from core.visualizer import RunningFormVisualizer
+from core.analyzer import AIRunningCoach
+from core.llm_client import create_llm_client
+from core.quality_check import VideoQualityChecker
+from core.fatigue_analyzer import FatigueAnalyzer
 
-os.makedirs(VIDEOS_DIR, exist_ok=True)
-os.makedirs(RESULTS_DIR, exist_ok=True)
-os.makedirs(REPORTS_DIR, exist_ok=True)
+# Storage
+_default_data = str(Path(__file__).parent.parent / "data")
+STORAGE = Path(os.environ.get("STORAGE_DIR", _default_data))
+VIDEOS = STORAGE / "videos"
+RESULTS = STORAGE / "results"
+REPORTS = STORAGE / "reports"
+FRONTEND = Path(__file__).parent.parent / "frontend"
+for d in [VIDEOS, RESULTS, REPORTS]:
+    d.mkdir(parents=True, exist_ok=True)
 
-ALLOWED_EXTENSIONS = {".mp4", ".mov", ".avi", ".mkv", ".webm"}
+ALLOWED = {".mp4", ".mov", ".avi", ".mkv", ".webm"}
 
-
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    print(f"  📂 Videos: {VIDEOS_DIR}")
-    print(f"  📂 Results: {RESULTS_DIR}")
-    print(f"  🖥️  Frontend: {FRONTEND_DIR}")
-    yield
-
-
-app = FastAPI(
-    title="Running Form Analyzer API",
-    description="上传跑步视频，异步分析跑姿并生成报告",
-    version="2.0.0",
-    lifespan=lifespan,
-)
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+app = FastAPI(title="Running Form Analyzer API", version="2.0.0")
+app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True,
+                   allow_methods=["*"], allow_headers=["*"])
 
 
-# ── API Routes ─────────────────────────────────
+# ── Routes ─────────────────────────────────────
 
 @app.get("/api/health")
 def health():
-    return {"status": "ok"}
+    return {"status": "ok", "mode": "async" if CELERY_OK else "sync"}
 
 
 @app.post("/api/upload")
 async def upload_video(file: UploadFile = File(...),
-                       stride: int = 2,
-                       render: bool = True,
+                       stride: int = 2, render: bool = True,
                        do_fatigue: bool = True,
                        llm_provider: str = "deepseek"):
-    """Upload a video and start async analysis."""
-    # Validate file
     ext = Path(file.filename).suffix.lower()
-    if ext not in ALLOWED_EXTENSIONS:
-        raise HTTPException(400, f"Unsupported format: {ext}")
+    if ext not in ALLOWED:
+        raise HTTPException(400, f"Unsupported: {ext}")
 
-    # Generate task ID and save video
     task_id = str(uuid.uuid4())
-    video_path = VIDEOS_DIR / f"{task_id}{ext}"
-
+    video_path = VIDEOS / f"{task_id}{ext}"
+    content = await file.read()
     with open(video_path, "wb") as f:
-        content = await file.read()
         f.write(content)
 
-    # Start async task
-    task = analyze_video_task.delay(
-        task_id=task_id,
-        video_path=str(video_path),
-        stride=stride,
-        render=render,
-        do_fatigue=do_fatigue,
-        llm_provider=llm_provider,
-    )
-
-    return {
-        "task_id": task_id,
-        "celery_task_id": task.id,
-        "status": "queued",
-        "video_size_mb": round(len(content) / 1024 / 1024, 1),
-    }
+    if CELERY_OK:
+        task = analyze_video_task.delay(
+            task_id=task_id, video_path=str(video_path),
+            stride=stride, render=render,
+            do_fatigue=do_fatigue, llm_provider=llm_provider)
+        return {"task_id": task_id, "celery_task_id": task.id,
+                "status": "queued",
+                "video_size_mb": round(len(content) / 1024 / 1024, 1)}
+    else:
+        result = _run_sync(task_id, str(video_path), stride, render,
+                           do_fatigue, llm_provider)
+        return {"task_id": task_id, "celery_task_id": None,
+                "status": "completed",
+                "video_size_mb": round(len(content) / 1024 / 1024, 1),
+                "result": result}
 
 
 @app.get("/api/status/{task_id}")
 def get_status(task_id: str):
-    """Get analysis progress and results."""
-    # Check Celery async result
-    from celery.result import AsyncResult
-    from worker.celery_app import celery_app as app
-
-    # Search for result in stored results
-    result_path = RESULTS_DIR / f"{task_id}.json"
+    result_path = RESULTS / f"{task_id}.json"
     if result_path.exists():
         with open(result_path, encoding="utf-8") as f:
             data = json.load(f)
-        return {
-            "task_id": task_id,
-            "status": data.get("status", "completed"),
-            "progress": 100,
-            "result": data,
-        }
-
+        return {"task_id": task_id, "status": "completed",
+                "progress": 100, "result": data}
     return {"task_id": task_id, "status": "processing", "progress": 0}
 
 
 @app.get("/api/videos/{filename}")
 def get_video(filename: str):
-    """Serve rendered preview videos."""
-    video_path = REPORTS_DIR / filename
-    if not video_path.exists():
-        raise HTTPException(404, "Video not found")
-
-    media_type = "video/mp4"
-    if filename.endswith(".webm"):
-        media_type = "video/webm"
-
-    return FileResponse(str(video_path), media_type=media_type)
+    path = REPORTS / filename
+    if not path.exists():
+        raise HTTPException(404, "Not found")
+    mt = "video/webm" if filename.endswith(".webm") else "video/mp4"
+    return FileResponse(str(path), media_type=mt)
 
 
 @app.get("/api/reports/{task_id}")
 def get_report(task_id: str):
-    """Download analysis report as HTML."""
-    result_path = RESULTS_DIR / f"{task_id}.json"
+    result_path = RESULTS / f"{task_id}.json"
     if not result_path.exists():
         raise HTTPException(404, "Report not found")
-
     with open(result_path, encoding="utf-8") as f:
         data = json.load(f)
-
-    report_text = data.get("report", "")
-    html = _generate_html_report(report_text)
-
+    html = _md_to_html(data.get("report", ""))
     return HTMLResponse(content=html, media_type="text/html",
                         headers={
                             "Content-Disposition":
@@ -161,48 +128,90 @@ def get_report(task_id: str):
 
 @app.get("/")
 def index():
-    """Serve the SPA frontend."""
-    index_path = FRONTEND_DIR / "index.html"
-    if index_path.exists():
-        return HTMLResponse(index_path.read_text(encoding="utf-8"))
-    return HTMLResponse("<h1>Running Form Analyzer</h1><p>Frontend not found</p>")
+    p = FRONTEND / "index.html"
+    return HTMLResponse(p.read_text(encoding="utf-8") if p.exists()
+                        else "<h1>Frontend not found</h1>")
 
 
-@app.get("/app/{path:path}")
-def serve_frontend(path: str):
-    """Serve static frontend files."""
-    file_path = FRONTEND_DIR / path
-    if file_path.exists() and file_path.is_file():
-        return FileResponse(str(file_path))
-    # SPA fallback
-    index_path = FRONTEND_DIR / "index.html"
-    if index_path.exists():
-        return HTMLResponse(index_path.read_text(encoding="utf-8"))
-    raise HTTPException(404)
+# ── Sync fallback ──────────────────────────────
+
+def _run_sync(task_id, video_path, stride, render, do_fatigue, llm_provider):
+    """Run analysis directly (no Celery/Redis needed)."""
+    result = {"task_id": task_id, "status": "processing", "total_frames": 0}
+
+    # Step 1
+    extractor = PoseExtractor(model_complexity=1)
+    seq = extractor.extract_from_video(video_path, stride=stride)
+    if not seq.landmarks_seq:
+        return {**result, "status": "error", "error": "No pose detected"}
+    result["total_frames"] = len(seq.landmarks_seq)
+
+    # Step 1.5
+    qc = VideoQualityChecker()
+    qr = qc.check(seq)
+    result["quality"] = {"passed": qr.passed, "score": qr.score,
+                         "summary": qr.summary, "issues": qr.issues,
+                         "tips": qr.tips}
+
+    # Step 2
+    calc = RunningMetricsCalculator()
+    metrics = calc.compute(seq)
+    scoring = calc.get_scoring(metrics)
+    result["metrics"] = metrics.summary()
+    result["scoring"] = scoring
+
+    # Step 3
+    if render:
+        raw = str(REPORTS / f"{task_id}_raw.mp4")
+        preview = str(REPORTS / f"{task_id}_preview.mp4")
+        RunningFormVisualizer().render_video(video_path, raw, seq, metrics)
+        subprocess.run(["ffmpeg", "-y", "-i", raw, "-c:v", "libx264",
+                        "-preset", "fast", "-pix_fmt", "yuv420p",
+                        "-movflags", "+faststart", preview],
+                       capture_output=True, timeout=120)
+        if os.path.exists(preview):
+            result["preview_video"] = f"/api/videos/{task_id}_preview.mp4"
+        if os.path.exists(raw):
+            os.remove(raw)
+
+    # Step 3.5
+    if do_fatigue:
+        fa = FatigueAnalyzer()
+        fr = fa.analyze(seq)
+        result["fatigue"] = fr.to_dict()
+
+    # Step 4
+    provider = llm_provider or os.environ.get("LLM_PROVIDER", "deepseek")
+    client = create_llm_client(provider=provider, auto_fallback=True)
+    coach = AIRunningCoach(llm_api_func=client,
+                            fatigue_report=result.get("fatigue"))
+    report = coach.generate_report(metrics, scoring)
+    result["report"] = report
+    result["llm_active"] = client is not None
+
+    # Save
+    with open(RESULTS / f"{task_id}.json", "w", encoding="utf-8") as f:
+        json.dump(result, f, ensure_ascii=False, indent=2)
+
+    result["status"] = "completed"
+    return result
 
 
-# ── Helper ────────────────────────────────────
-
-def _generate_html_report(text: str) -> str:
-    """Convert markdown report to styled HTML."""
-    import re
+def _md_to_html(text: str) -> str:
     html = text
     html = re.sub(r'^### (.+)$', r'<h3>\1</h3>', html, flags=re.M)
     html = re.sub(r'^## (.+)$', r'<h2>\1</h2>', html, flags=re.M)
     html = re.sub(r'\*\*(.+?)\*\*', r'<strong>\1</strong>', html)
     html = re.sub(r'\*(.+?)\*', r'<em>\1</em>', html)
     html = re.sub(r'^- (.+)$', r'<li>\1</li>', html, flags=re.M)
-    html = re.sub(r'^\d+\.\s+(.+)$', r'<li>\1</li>', html, flags=re.M)
-    return f"""<!DOCTYPE html>
-<html lang="zh-CN"><head><meta charset="utf-8"><title>跑姿分析报告</title>
-<style>
-body{{font-family:-apple-system,'Microsoft YaHei',sans-serif;max-width:800px;margin:40px auto;padding:20px;line-height:1.8;background:#fff;color:#1a1a1a}}
+    return f"""<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8">
+<title>跑姿分析报告</title><style>
+body{{font-family:-apple-system,'Microsoft YaHei',sans-serif;max-width:800px;margin:40px auto;padding:20px;line-height:1.8}}
 h2{{border-bottom:2px solid #00cc66;padding-bottom:4px}}
-ul,ol{{padding-left:20px}}
-li{{margin:4px 0}}
+ul,p{{padding-left:0}}li{{margin:4px 0}}
 </style></head><body>{html}</body></html>"""
 
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("api.main:app", host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run("api.main:app", host="0.0.0.0", port=8000)
