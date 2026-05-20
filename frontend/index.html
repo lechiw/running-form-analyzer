@@ -1,0 +1,331 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>🏃 Running Form Analyzer</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,'Microsoft YaHei',sans-serif;background:#f5f5f5;color:#1a1a1a;line-height:1.6}
+.container{max-width:960px;margin:0 auto;padding:20px}
+header{text-align:center;padding:30px 0}
+header h1{font-size:2em;margin-bottom:8px}
+header p{color:#666}
+.card{background:#fff;border-radius:12px;box-shadow:0 2px 8px rgba(0,0,0,.08);padding:24px;margin-bottom:16px}
+.card h2{margin-bottom:16px;font-size:1.2em}
+.hidden{display:none}
+
+/* Upload */
+.upload-zone{border:2px dashed #ccc;border-radius:12px;padding:40px;text-align:center;cursor:pointer;transition:all .3s}
+.upload-zone:hover,.upload-zone.dragover{border-color:#00cc66;background:#f0fff0}
+.upload-zone input{display:none}
+.upload-zone .icon{font-size:48px;margin-bottom:12px}
+.upload-zone .hint{color:#999;font-size:.9em}
+
+/* Options */
+.options{display:flex;gap:16px;flex-wrap:wrap;margin-bottom:16px}
+.options label{display:flex;align-items:center;gap:6px;font-size:.9em;cursor:pointer}
+.options input[type="checkbox"]{width:16px;height:16px}
+
+/* Progress */
+.progress-bar{height:8px;background:#e0e0e0;border-radius:4px;overflow:hidden;margin:12px 0}
+.progress-fill{height:100%;background:linear-gradient(90deg,#00cc66,#00e676);border-radius:4px;transition:width .5s;width:0%}
+.progress-text{font-size:.9em;color:#666;text-align:center;margin-bottom:8px}
+
+/* Status */
+.status-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:16px}
+.stat-item{text-align:center;padding:12px;background:#f8f9fa;border-radius:8px}
+.stat-item .value{font-size:1.5em;font-weight:700;color:#1a1a1a}
+.stat-item .label{font-size:.8em;color:#666;margin-top:4px}
+
+/* Sections */
+.section{background:#fff;border-radius:12px;padding:24px;margin-bottom:16px;box-shadow:0 2px 8px rgba(0,0,0,.08)}
+.section h3{cursor:pointer;display:flex;justify-content:space-between;align-items:center}
+.section h3 .toggle{font-size:.8em;color:#999}
+.section-body{padding-top:16px}
+.metric-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
+.metric-card{text-align:center;padding:12px;background:#f8f9fa;border-radius:8px}
+.metric-card .value{font-size:1.2em;font-weight:600}
+.metric-card .label{font-size:.8em;color:#666;margin-top:4px}
+
+/* Table */
+table{width:100%;border-collapse:collapse;font-size:.9em}
+th,td{padding:10px 12px;text-align:left;border-bottom:1px solid #eee}
+th{background:#f8f9fa;font-weight:600}
+
+/* Report */
+.report-body{line-height:1.8;font-size:.95em}
+.report-body h2{border-bottom:2px solid #00cc66;padding-bottom:6px;margin:20px 0 12px;font-size:1.2em}
+.report-body h3{margin:16px 0 8px;font-size:1.05em}
+.report-body ul{padding-left:20px;margin:8px 0}
+.report-body li{margin:4px 0}
+.report-body strong{color:#1a1a1a}
+
+/* Buttons */
+.btn{display:inline-block;padding:8px 20px;border-radius:6px;border:none;cursor:pointer;font-size:.9em;transition:all .2s}
+.btn-primary{background:#00cc66;color:#fff}
+.btn-primary:hover{background:#00b359}
+.btn-outline{border:1px solid #ccc;background:#fff}
+.btn-outline:hover{border-color:#00cc66;color:#00cc66}
+.btn:disabled{opacity:.6;cursor:not-allowed}
+.download-bar{display:flex;gap:12px;margin-bottom:16px}
+
+/* Video */
+video{max-width:100%;border-radius:8px;max-height:200px}
+
+/* Mobile */
+@media(max-width:640px){
+  .metric-grid,.status-grid{grid-template-columns:repeat(2,1fr)}
+  .download-bar{flex-direction:column}
+}
+</style>
+</head>
+<body>
+
+<div class="container">
+<header>
+  <h1>🏃 Running Form Analyzer</h1>
+  <p>上传跑步视频，AI 自动分析跑姿并生成报告</p>
+</header>
+
+<!-- Upload -->
+<div class="card" id="upload-card">
+  <h2>📤 上传视频</h2>
+  <div class="upload-zone" id="dropzone" onclick="document.getElementById('fileInput').click()">
+    <div class="icon">🎬</div>
+    <p>点击或拖拽视频到此处</p>
+    <p class="hint">支持 MP4、MOV、AVI 格式</p>
+    <input type="file" id="fileInput" accept="video/*" onchange="handleFile(this.files[0])">
+  </div>
+  <div class="options" style="margin-top:16px">
+    <label><input type="checkbox" id="optRender" checked> 🎬 生成可视化视频</label>
+    <label><input type="checkbox" id="optFatigue" checked> 🔄 疲劳对比分析</label>
+  </div>
+  <div id="fileInfo" class="hidden" style="margin-top:12px;padding:12px;background:#f0fff0;border-radius:8px">
+    <p id="fileName"></p>
+    <button class="btn btn-primary" id="btnAnalyze" onclick="startAnalysis()">🚀 开始分析</button>
+  </div>
+</div>
+
+<!-- Progress -->
+<div id="progressCard" class="card hidden">
+  <h2>⏳ 分析进度</h2>
+  <p class="progress-text" id="progressMessage">初始化...</p>
+  <div class="progress-bar"><div class="progress-fill" id="progressFill"></div></div>
+</div>
+
+<!-- Status -->
+<div id="resultsCard" class="hidden">
+  <div class="status-grid">
+    <div class="stat-item"><div class="value" id="statFrames">-</div><div class="label">处理帧数</div></div>
+    <div class="stat-item"><div class="value" id="statScore">-</div><div class="label">🏆 跑姿评分</div></div>
+    <div class="stat-item"><div class="value" id="statAI">-</div><div class="label">AI 报告</div></div>
+  </div>
+
+  <!-- Download Bar -->
+  <div class="download-bar" id="downloadBar">
+    <button class="btn btn-primary" id="btnDownloadReport" onclick="downloadReport()">📥 下载 HTML 报告</button>
+    <button class="btn btn-primary hidden" id="btnDownloadVideo" onclick="downloadVideo()">📥 下载可视化视频</button>
+  </div>
+
+  <!-- Quality -->
+  <div class="section" id="sectionQuality">
+    <h3 onclick="toggleBody(this)">🎥 拍摄质量检查 <span class="toggle">▼</span></h3>
+    <div class="section-body" id="qualityBody"></div>
+  </div>
+
+  <!-- Metrics -->
+  <div class="section">
+    <h3 onclick="toggleBody(this)">📊 跑姿指标 <span class="toggle">▼</span></h3>
+    <div class="section-body"><div class="metric-grid" id="metricsGrid"></div></div>
+  </div>
+
+  <!-- Fatigue -->
+  <div class="section hidden" id="sectionFatigue">
+    <h3 onclick="toggleBody(this)">🔄 疲劳分析 <span class="toggle">▼</span></h3>
+    <div class="section-body" id="fatigueBody"></div>
+  </div>
+
+  <!-- Report -->
+  <div class="section">
+    <h3 onclick="toggleBody(this)">📝 分析报告 <span class="toggle">▼</span></h3>
+    <div class="section-body report-body" id="reportBody"></div>
+  </div>
+
+  <!-- Video -->
+  <div class="section hidden" id="sectionVideo">
+    <h3 onclick="toggleBody(this)">🎬 可视化视频 <span class="toggle">▼</span></h3>
+    <div class="section-body"><video id="previewVideo" controls></video></div>
+  </div>
+</div>
+</div>
+
+<script>
+const API = '';
+
+let currentTaskId = null;
+let pollTimer = null;
+
+function handleFile(file) {
+  if (!file) return;
+  document.getElementById('fileName').textContent = `📄 ${file.name} (${(file.size/1024/1024).toFixed(1)}MB)`;
+  document.getElementById('fileInfo').classList.remove('hidden');
+}
+
+async function startAnalysis() {
+  const fileInput = document.getElementById('fileInput');
+  if (!fileInput.files.length) return;
+
+  const formData = new FormData();
+  formData.append('file', fileInput.files[0]);
+  formData.append('stride', '2');
+  formData.append('render', document.getElementById('optRender').checked ? 'true' : 'false');
+  formData.append('do_fatigue', document.getElementById('optFatigue').checked ? 'true' : 'false');
+
+  // Show progress
+  document.getElementById('resultsCard').classList.add('hidden');
+  document.getElementById('progressCard').classList.remove('hidden');
+  document.getElementById('btnAnalyze').disabled = true;
+
+  try {
+    const resp = await fetch(`${API}/api/upload`, {method:'POST', body:formData});
+    const data = await resp.json();
+    currentTaskId = data.task_id;
+    pollProgress(data.task_id);
+  } catch(e) {
+    showError('上传失败: ' + e.message);
+  }
+}
+
+async function pollProgress(taskId) {
+  try {
+    const resp = await fetch(`${API}/api/status/${taskId}`);
+    const data = await resp.json();
+
+    document.getElementById('progressFill').style.width = (data.progress || 0) + '%';
+    document.getElementById('progressMessage').textContent = data.result?.message || data.status;
+
+    if (data.status === 'completed' && data.result) {
+      showResults(data.result);
+      return;
+    }
+    if (data.status === 'error') {
+      showError(data.result?.error || '分析失败');
+      return;
+    }
+    setTimeout(() => pollProgress(taskId), 1000);
+  } catch(e) {
+    setTimeout(() => pollProgress(taskId), 2000);
+  }
+}
+
+function showResults(r) {
+  document.getElementById('progressCard').classList.add('hidden');
+  document.getElementById('resultsCard').classList.remove('hidden');
+  document.getElementById('btnAnalyze').disabled = false;
+
+  // Stats
+  document.getElementById('statFrames').textContent = r.total_frames || '-';
+  document.getElementById('statScore').textContent = (r.scoring?.overall_score ?? '-') + '/100';
+  document.getElementById('statAI').textContent = r.llm_active ? '✅ 已启用' : '📝 模板';
+
+  // Quality
+  const q = r.quality;
+  if (q) {
+    let qh = q.passed ? '✅ ' : '⚠️ ';
+    qh += (q.summary || '') + ` (评分: ${q.score}/100)`;
+    let qb = '';
+    (q.issues||[]).forEach(i => qb += `<p>❌ ${i}</p>`);
+    (q.tips||[]).forEach(t => qb += `<p>💡 ${t}</p>`);
+    document.getElementById('qualityBody').innerHTML = `<p>${qh}</p>${qb}`;
+  }
+
+  // Metrics
+  const m = r.metrics || {};
+  const items = [
+    ['步频', m.cadence_spm + ' spm'], ['躯干前倾', m.trunk_lean_deg + '°'],
+    ['垂直振幅', m.vertical_oscillation_cm + ' cm'], ['手臂对称', m.arm_symmetry_score + '/100'],
+    ['触地距离', m.foot_strike_distance_cm + ' cm'], ['着地方式', m.foot_strike_type || '-']
+  ];
+  document.getElementById('metricsGrid').innerHTML = items.map(([l,v]) =>
+    `<div class="metric-card"><div class="value">${v.replace('N/A','-')}</div><div class="label">${l}</div></div>`
+  ).join('');
+
+  // Fatigue
+  const ft = r.fatigue;
+  if (ft) {
+    document.getElementById('sectionFatigue').classList.remove('hidden');
+    const lv = {normal:'✅ 正常',mild:'⚡ 轻度',moderate:'⚠️ 中度',severe:'🔴 重度'};
+    let fb = `<p>${lv[ft.fatigue_level]||'?'}（${(ft.fatigue_score||0).toFixed(0)}/100）</p>`;
+    if (ft.deltas?.length) {
+      fb += '<table><tr><th>指标</th><th>前段</th><th>后段</th><th>变化</th></tr>';
+      ft.deltas.forEach(d => {
+        if (d.baseline != null || d.fatigue != null) {
+          const ch = d.change;
+          const cs = ch != null ? (ch < 0 ? '▼ ' : '▲ ') + Math.abs(ch).toFixed(1) : '-';
+          fb += `<tr><td>${d.metric}</td><td>${d.baseline??'-'}</td><td>${d.fatigue??'-'}</td><td>${cs}</td></tr>`;
+        }
+      });
+      fb += '</table>';
+    }
+    document.getElementById('fatigueBody').innerHTML = fb;
+  }
+
+  // Report
+  const report = r.report || '';
+  document.getElementById('reportBody').innerHTML = renderMarkdown(report);
+
+  // Video
+  if (r.preview_video) {
+    document.getElementById('sectionVideo').classList.remove('hidden');
+    document.getElementById('previewVideo').src = `${API}${r.preview_video}`;
+    document.getElementById('btnDownloadVideo').classList.remove('hidden');
+  }
+}
+
+function renderMarkdown(text) {
+  let html = text;
+  html = html.replace(/^### (.+)$/gm, '<h3>$1</h3>');
+  html = html.replace(/^## (.+)$/gm, '<h2>$1</h2>');
+  html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+  html = html.replace(/\*(.+?)\*/g, '<em>$1</em>');
+  html = html.replace(/^- (.+)$/gm, '<li>$1</li>');
+  html = html.replace(/^(\d+)\.\s+(.+)$/gm, '<li>$2</li>');
+  return html;
+}
+
+function toggleBody(el) {
+  const body = el.parentElement.nextElementSibling;
+  const isHidden = body.style.display === 'none';
+  body.style.display = isHidden ? 'block' : 'none';
+  el.querySelector('.toggle').textContent = isHidden ? '▼' : '▶';
+}
+
+function downloadReport() {
+  if (currentTaskId) window.open(`${API}/api/reports/${currentTaskId}`);
+}
+
+function downloadVideo() {
+  if (currentTaskId) window.open(`${API}/api/videos/${currentTaskId}_preview.mp4`);
+}
+
+function showError(msg) {
+  document.getElementById('progressCard').classList.add('hidden');
+  document.getElementById('resultsCard').innerHTML =
+    `<div class="section"><p style="color:red">❌ ${msg}</p></div>`;
+  document.getElementById('resultsCard').classList.remove('hidden');
+  document.getElementById('btnAnalyze').disabled = false;
+}
+
+// Drag & drop
+const dz = document.getElementById('dropzone');
+dz.addEventListener('dragover', e => { e.preventDefault(); dz.classList.add('dragover'); });
+dz.addEventListener('dragleave', () => dz.classList.remove('dragover'));
+dz.addEventListener('drop', e => {
+  e.preventDefault();
+  dz.classList.remove('dragover');
+  if (e.dataTransfer.files.length) handleFile(e.dataTransfer.files[0]);
+});
+</script>
+</body>
+</html>

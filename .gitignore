@@ -10,15 +10,20 @@ venv/
 
 # Generated output
 output/
-samples/*.mp4
+
+# Data (Docker)
+/data/
+
+# Environment
+.env
 
 # IDE
 .vscode/
 .idea/
 
-# Environment
-.env
-
 # OS
 .DS_Store
 Thumbs.db
+
+# Large media samples
+samples/*.mp4

@@ -1,13 +1,13 @@
-# Running Form Analyzer - Running Form Biomechanics
-#
-# Core dependencies:
+# Running Form Analyzer - Core
 mediapipe>=0.10.9,<0.10.20
 opencv-python>=4.8.0
 numpy>=1.24.0
 
-# Web UI (optional):
-# streamlit
+# API Server (v2 architecture):
+fastapi>=0.110.0
+uvicorn[standard]>=0.29.0
+celery[redis]>=5.4.0
+python-multipart>=0.0.9
 
-# LLM report (optional - for AI-powered analysis reports):
-# Set DEEPSEEK_API_KEY or OPENAI_API_KEY env var to activate.
-# The built-in HTTP client uses only the Python standard library.
+# LLM report (optional):
+# Set DEEPSEEK_API_KEY or OPENAI_API_KEY env var.
