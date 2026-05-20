@@ -16,6 +16,9 @@ samples/*.mp4
 .vscode/
 .idea/
 
+# Environment
+.env
+
 # OS
 .DS_Store
 Thumbs.db

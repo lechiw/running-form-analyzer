@@ -16,13 +16,15 @@ from pose_extractor import PoseExtractor, PoseSequence
 from metrics import RunningMetricsCalculator, RunningMetrics
 from visualizer import RunningFormVisualizer
 from analyzer import AIRunningCoach
+from llm_client import create_llm_client
 
 
 def analyze_video(video_path: str,
                   render: bool = False,
                   output_dir: str = "./output",
                   max_frames: Optional[int] = None,
-                  stride: int = 2) -> dict:
+                  stride: int = 2,
+                  llm_provider: Optional[str] = None) -> dict:
     """
     Full pipeline: extract pose, compute metrics, generate report.
 
@@ -90,8 +92,13 @@ def analyze_video(video_path: str,
         output_video = None
 
     # Step 4: Generate report
+    # Step 4: Generate AI report
     print("\n📝 Step 4/4: Generating analysis report...")
-    coach = AIRunningCoach()  # No LLM = template report
+
+    # Try to initialize LLM client (silently uses template if no key)
+    provider = llm_provider or os.environ.get("LLM_PROVIDER", "deepseek")
+    llm_client = create_llm_client(provider=provider)
+    coach = AIRunningCoach(llm_api_func=llm_client)
     report = coach.generate_report(metrics, scoring)
 
     report_path = os.path.join(output_dir, f"{base_name}_report.txt")
@@ -102,6 +109,10 @@ def analyze_video(video_path: str,
     print("\n" + "=" * 60)
     print("✅ Analysis complete!")
     print(f"   Results directory: {output_dir}")
+    if llm_client:
+        print(f"   Report type: AI-powered ({llm_client.provider}/{llm_client.model})")
+    else:
+        print(f"   Report type: Template (set DEEPSEEK_API_KEY for AI report)")
     print("=" * 60)
 
     return {
@@ -125,6 +136,9 @@ def main():
                         help="Max frames to process (default: all)")
     parser.add_argument("--stride", type=int, default=2,
                         help="Process every N frames (default: 2)")
+    parser.add_argument("--llm-provider", default=None,
+                        choices=["deepseek", "openai", None],
+                        help="LLM provider for AI report (default: from env LLM_PROVIDER or deepseek)")
 
     args = parser.parse_args()
 
@@ -138,6 +152,7 @@ def main():
         output_dir=args.output_dir,
         max_frames=args.max_frames,
         stride=args.stride,
+        llm_provider=args.llm_provider,
     )
 
     # Print report to console

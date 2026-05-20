@@ -55,11 +55,27 @@ running-form-analyzer/
 └── output/             # 分析结果输出
 ```
 
+## AI 报告
+
+默认使用模板报告。设置 API Key 后可开启 AI 驱动的智能分析：
+
+```bash
+# DeepSeek（推荐）
+export DEEPSEEK_API_KEY=sk-your-key-here
+
+# 或 OpenAI
+export OPENAI_API_KEY=sk-your-key-here
+
+# 运行时会自动检测并使用 LLM
+python3 run.py 你的视频.mp4 --render
+```
+
 ## 技术栈
 
 - MediaPipe Pose（姿态估计）
 - OpenCV（视频处理）
 - NumPy（数值计算）
+- LLM API（可选：DeepSeek / OpenAI）
 
 ## License
 
