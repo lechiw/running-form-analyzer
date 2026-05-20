@@ -31,6 +31,11 @@ python3 run.py /path/to/your/running_video.mp4 --render
 
 ```bash
 pip install streamlit
+
+# 一键启动（推荐）
+bash start_web.sh
+
+# 或手动启动
 streamlit run app.py
 ```
 

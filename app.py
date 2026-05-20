@@ -52,7 +52,7 @@ st.markdown("""
     }
     .report-box strong { color: #1a1a1a; }
     .report-box em { color: #333; }
-    video { max-height: 280px !important; }
+    video { max-height: 400px !important; }
     .st-emotion-cache-1y4p8pa { padding: 2rem 1rem; }
 </style>
 """, unsafe_allow_html=True)
