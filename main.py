@@ -18,6 +18,7 @@ from visualizer import RunningFormVisualizer
 from analyzer import AIRunningCoach
 from llm_client import create_llm_client
 from quality_check import VideoQualityChecker, print_quality_report
+from fatigue_analyzer import FatigueAnalyzer, format_fatigue_report
 
 
 def analyze_video(video_path: str,
@@ -25,7 +26,8 @@ def analyze_video(video_path: str,
                   output_dir: str = "./output",
                   max_frames: Optional[int] = None,
                   stride: int = 2,
-                  llm_provider: Optional[str] = None) -> dict:
+                  llm_provider: Optional[str] = None,
+                  do_fatigue: bool = False) -> dict:
     """
     Full pipeline: extract pose, compute metrics, generate report.
 
@@ -102,14 +104,36 @@ def analyze_video(video_path: str,
     else:
         output_video = None
 
+    # Step 3.5: Fatigue analysis (optional)
+    if do_fatigue:
+        print("\n🔄 Step 3.5/4: Analyzing fatigue...")
+        fatigue_analyzer = FatigueAnalyzer()
+        fatigue_report = fatigue_analyzer.analyze(seq)
+
+        fatigue_text = format_fatigue_report(fatigue_report)
+        print(fatigue_text)
+
+        # Save fatigue report
+        fatigue_path = os.path.join(output_dir, f"{base_name}_fatigue.txt")
+        with open(fatigue_path, "w") as f:
+            f.write(fatigue_text)
+        print(f"   Fatigue report saved to: {fatigue_path}")
+
+        # Also save fatigue JSON for LLM
+        fatigue_json_path = os.path.join(output_dir, f"{base_name}_fatigue.json")
+        with open(fatigue_json_path, "w") as f:
+            json.dump(fatigue_report.to_dict(), f, indent=2)
+    else:
+        fatigue_report = None
+
     # Step 4: Generate report
-    # Step 4: Generate AI report
     print("\n📝 Step 4/4: Generating analysis report...")
 
     # Try to initialize LLM client (silently uses template if no key)
     provider = llm_provider or os.environ.get("LLM_PROVIDER", "deepseek")
     llm_client = create_llm_client(provider=provider)
-    coach = AIRunningCoach(llm_api_func=llm_client)
+    fatigue_dict = fatigue_report.to_dict() if fatigue_report else None
+    coach = AIRunningCoach(llm_api_func=llm_client, fatigue_report=fatigue_dict)
     report = coach.generate_report(metrics, scoring)
 
     report_path = os.path.join(output_dir, f"{base_name}_report.txt")
@@ -150,6 +174,8 @@ def main():
     parser.add_argument("--llm-provider", default=None,
                         choices=["deepseek", "openai", None],
                         help="LLM provider for AI report (default: from env LLM_PROVIDER or deepseek)")
+    parser.add_argument("--fatigue", action="store_true",
+                        help="Enable fatigue comparison (compares start vs end of video)")
 
     args = parser.parse_args()
 
@@ -164,6 +190,7 @@ def main():
         max_frames=args.max_frames,
         stride=args.stride,
         llm_provider=args.llm_provider,
+        do_fatigue=args.fatigue,
     )
 
     # Print report to console
