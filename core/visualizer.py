@@ -134,6 +134,11 @@ class RunningFormVisualizer:
                 ("Foot Strike", f"{overall.avg_foot_strike_distance:.1f}cm" if overall.avg_foot_strike_distance else "N/A",
                  "GOOD" if overall.avg_foot_strike_distance and overall.avg_foot_strike_distance < 15 else "CHECK"),
                 ("Strike Type", overall.foot_strike_type_dominant or "N/A", "INFO"),
+                ("Hip Drop", f"{overall.avg_hip_drop_cm:.1f}cm" if overall.avg_hip_drop_cm else "N/A",
+                 "GOOD" if overall.avg_hip_drop_cm and overall.avg_hip_drop_cm < 2 else "CHECK"),
+                ("GCT", f"{overall.ground_contact_time_ms:.0f}ms" if overall.ground_contact_time_ms else "N/A",
+                 "GOOD" if overall.ground_contact_time_ms and overall.ground_contact_time_ms < 250 else "CHECK"),
+                ("Step Len", f"{overall.estimated_step_length_cm:.0f}cm" if overall.estimated_step_length_cm else "N/A", "INFO"),
             ]
 
             for label, value, status in metrics:
@@ -160,8 +165,11 @@ class RunningFormVisualizer:
                 live_metrics.append(f"R Elbow: {frame_metrics.right_elbow_angle:.0f}°")
             if frame_metrics.arm_symmetry_score is not None:
                 live_metrics.append(f"Sym: {frame_metrics.arm_symmetry_score:.0f}%")
-            if frame_metrics.foot_strike_distance is not None:
-                live_metrics.append(f"Strike: {frame_metrics.foot_strike_distance:.1f}cm")
+            if frame_metrics.foot_strike_distance_cm is not None:
+                live_metrics.append(f"Strike: {frame_metrics.foot_strike_distance_cm:.1f}cm")
+            if frame_metrics.hip_drop_px is not None and overall.avg_px_to_cm:
+                drop_cm = frame_metrics.hip_drop_px * overall.avg_px_to_cm
+                live_metrics.append(f"Drop: {drop_cm:.1f}cm")
 
             for metric in live_metrics:
                 cv2.putText(frame, metric, (panel_x + 15, y_offset),

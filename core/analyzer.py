@@ -78,8 +78,8 @@ class AIRunningCoach:
         # Filter out unreliable metrics
         notes = []
         unreliable = []
-        if summary.get("vertical_oscillation_cm") and summary["vertical_oscillation_cm"] > 50:
-            unreliable.append("垂直振幅（数据异常，可能为拍摄角度导致）")
+        if summary.get("vertical_oscillation_cm") and summary["vertical_oscillation_cm"] > 25:
+            unreliable.append("垂直振幅（数据异常，>25cm超出正常范围，可能为拍摄角度导致）")
         if not summary.get("cadence_spm"):
             unreliable.append("步频（未获取到，建议用标准侧面视角重拍）")
         if not summary.get("trunk_lean_deg"):
@@ -120,6 +120,10 @@ class AIRunningCoach:
 - 右膝角度：{summary.get('avg_right_knee_angle_deg', 'N/A')}°
 - 总步态周期数：{summary.get('total_gait_cycles', 'N/A')}
 - 视频时长：{summary.get('duration_sec', 'N/A')} 秒
+- 骨盆倾斜/髋部下坠：{summary.get('hip_drop_cm', 'N/A')} cm（>2cm需关注）
+- 触地时间：{summary.get('ground_contact_time_ms', 'N/A')} ms
+- 步幅估计：{summary.get('estimated_step_length_cm', 'N/A')} cm
+- 支撑相比例：{summary.get('stance_ratio', 'N/A')}
 
 ## 各维度评分
 {chr(10).join(f'- {k}: {v}' for k, v in details.items())}
@@ -146,13 +150,6 @@ class AIRunningCoach:
         lines.append("")
         lines.append("> 💡 设置 DEEPSEEK_API_KEY 环境变量可开启 AI 智能分析报告")
         lines.append("")
-
-        # Check for unreliable metrics
-        if (summary.get("vertical_oscillation_cm") and
-            summary["vertical_oscillation_cm"] > 50):
-            lines.append("⚠️ **数据质量提示**：部分指标因拍摄角度问题可能不准确。")
-            lines.append("   建议使用标准侧面视角重新拍摄。")
-            lines.append("")
 
         # Fatigue section
         if self.fatigue_report and self.fatigue_report.get("fatigue_level"):
@@ -183,6 +180,8 @@ class AIRunningCoach:
             "arm_symmetry": "手臂对称性",
             "vertical_oscillation": "垂直振幅",
             "foot_strike": "触地控制",
+            "hip_drop": "骨盆倾斜",
+            "ground_contact": "触地时间",
         }
 
         if goods:
@@ -204,6 +203,10 @@ class AIRunningCoach:
                     "想象头顶有天花板，尽量减少弹跳"),
                 "foot_strike": ("触地控制",
                     "缩短步幅，加快步频，让脚落在身体正下方"),
+                "hip_drop": ("骨盆倾斜",
+                    "加强臀中肌训练（蚌式开合、侧抬腿）。跑步时注意骨盆保持水平"),
+                "ground_contact": ("触地时间",
+                    "加快步频可减少触地时间。练习快速抬腿和弹性落地"),
             }
             for k, v in needs:
                 detail = details.get(k, "")
