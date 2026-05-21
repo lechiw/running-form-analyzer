@@ -21,8 +21,8 @@ from fatigue_analyzer import FatigueAnalyzer, format_fatigue_report
 st.set_page_config(page_title="🏃 Running Form Analyzer", page_icon="🏃",
                    layout="wide", initial_sidebar_state="expanded")
 
-# Import comparison module
 from comparison import compare_analyses, format_comparison_report, comparison_to_dict
+from runner_profile import RunnerProfile
 
 OUTPUT_DIR = Path(__file__).parent / "output"
 OUTPUT_DIR.mkdir(exist_ok=True)
@@ -60,7 +60,6 @@ def _sidebar():
     with st.sidebar:
         st.header("⚙️ 分析设置")
         
-        # Mode selection
         mode = st.radio("工作模式", ["单次分析", "前后对比"], horizontal=True)
         
         stride = st.slider("采样步长", 1, 5, 2)
@@ -68,6 +67,21 @@ def _sidebar():
         render_video = st.checkbox("🎬 生成可视化视频", True)
         do_fatigue = st.checkbox("🔄 疲劳对比分析", True)
         llm_provider = st.selectbox("AI 报告引擎", ["deepseek", "openai", "template"], 0)
+        
+        # ── Personal Profile ──
+        st.divider()
+        st.markdown("### 📐 个人信息（选填）")
+        st.caption("提供后分析更准确")
+        profile_height = st.number_input("身高 (cm)", 120, 220, 175, step=1)
+        profile_gender = st.selectbox("性别", ["未设置", "男性", "女性"], 0)
+        profile_age = st.number_input("年龄", 10, 100, 30, step=1)
+        
+        profile = RunnerProfile(
+            height_cm=profile_height if profile_height > 0 else None,
+            gender={"男性": "male", "女性": "female"}.get(profile_gender),
+            age=profile_age if profile_age > 0 else None,
+        )
+        
         st.divider()
         st.markdown("### 📸 拍摄指南")
         st.info("侧面拍摄 · 手机固定 · 横屏 · 全身入画 · 浅色紧身衣")
@@ -77,11 +91,12 @@ def _sidebar():
                 st.success(f"✅ {llm_provider} API 已连接")
             else:
                 st.warning("⚠️ API 未配置，使用模板报告")
-    return mode, stride, max_frames, render_video, do_fatigue, llm_provider
+    return mode, stride, max_frames, render_video, do_fatigue, llm_provider, profile
 
 
 # ── Analysis pipeline ──────────────────────────
-def _run_analysis(video_path, stride, max_frames, render, do_fatigue, llm_provider):
+def _run_analysis(video_path, stride, max_frames, render, do_fatigue, llm_provider,
+                  profile=None):
     progress = st.progress(0, text="初始化...")
     res = {}
 
@@ -101,9 +116,9 @@ def _run_analysis(video_path, stride, max_frames, render, do_fatigue, llm_provid
 
     progress.progress(50, text="📊 计算跑姿指标...")
     calc = RunningMetricsCalculator()
-    metrics = calc.compute(seq)
-    scoring = calc.get_scoring(metrics)
-    res["metrics"] = metrics.summary()
+    metrics = calc.compute(seq, profile=profile)
+    scoring = calc.get_scoring(metrics, profile=profile)
+    res["metrics"] = metrics.summary(profile=profile)
     res["scoring"] = scoring
 
     output_video = None
@@ -280,7 +295,7 @@ def main():
     st.title("🏃 Running Form Analyzer")
     st.markdown("上传跑步视频，AI 自动分析跑姿并生成报告")
 
-    mode, stride, max_frames, render_video, do_fatigue, llm_provider = _sidebar()
+    mode, stride, max_frames, render_video, do_fatigue, llm_provider, profile = _sidebar()
 
     if "results" not in st.session_state:
         st.session_state.results = None
@@ -335,7 +350,8 @@ def main():
                         st.session_state.before_result = _run_analysis(
                             st.session_state.compare_before, stride,
                             max_frames if max_frames > 0 else None,
-                            render_video, do_fatigue, provider)
+                            render_video, do_fatigue, provider,
+                            profile=profile)
         with col2:
             if st.button("🚀 分析训练后", type="primary", use_container_width=True):
                 if st.session_state.compare_after and os.path.exists(st.session_state.compare_after):
@@ -343,7 +359,8 @@ def main():
                         st.session_state.after_result = _run_analysis(
                             st.session_state.compare_after, stride,
                             max_frames if max_frames > 0 else None,
-                            render_video, do_fatigue, provider)
+                            render_video, do_fatigue, provider,
+                            profile=profile)
         with col3:
             has_both = (st.session_state.get("before_result") 
                         and st.session_state.get("after_result"))
@@ -399,7 +416,8 @@ def main():
                         st.session_state.results = _run_analysis(
                             stable, stride,
                             max_frames if max_frames > 0 else None,
-                            render_video, do_fatigue, provider)
+                            render_video, do_fatigue, provider,
+                            profile=profile)
 
         if st.session_state.results:
             _display(st.session_state.results)

@@ -21,6 +21,7 @@ from typing import Dict, List, Optional, Tuple
 from dataclasses import dataclass, field
 from collections import Counter
 from pose_extractor import PoseSequence, PoseLandmarks, PoseExtractor
+from runner_profile import RunnerProfile
 
 
 # Landmark indices for convenience
@@ -325,9 +326,9 @@ class RunningMetrics:
     # Average px_to_cm for scaling
     avg_px_to_cm: Optional[float] = None
 
-    def summary(self) -> Dict:
+    def summary(self, profile: Optional['RunnerProfile'] = None) -> Dict:
         """Return a dict summary for display/LLM input."""
-        return {
+        d = {
             "cadence_spm": round(self.cadence_avg, 1) if self.cadence_avg is not None else None,
             "trunk_lean_deg": round(self.trunk_lean_avg, 1) if self.trunk_lean_avg is not None else None,
             "trunk_lean_direction": "forward" if self.trunk_lean_is_forward else "backward",
@@ -344,6 +345,18 @@ class RunningMetrics:
             "duration_sec": round(self.duration_sec, 1),
             "stance_ratio": round(self.stance_ratio, 2) if self.stance_ratio is not None else None,
         }
+        # Add height-normalized metrics if profile available
+        if profile and profile.height_cm:
+            if self.vertical_oscillation is not None:
+                # Vertical oscillation relative to height (%)
+                d["vertical_oscillation_pct_height"] = round(
+                    self.vertical_oscillation / profile.height_cm * 100, 2
+                )
+            if self.estimated_step_length_cm is not None:
+                d["step_length_height_ratio"] = round(
+                    self.estimated_step_length_cm / profile.height_cm, 2
+                )
+        return d
 
 
 class RunningMetricsCalculator:
@@ -367,7 +380,7 @@ class RunningMetricsCalculator:
     # ----------------------------------------------------------------
     # Main pipeline
     # ----------------------------------------------------------------
-    def compute(self, seq: PoseSequence) -> RunningMetrics:
+    def compute(self, seq: PoseSequence, profile: Optional[RunnerProfile] = None) -> RunningMetrics:
         """Full pipeline: compute all running metrics from a pose sequence."""
         if not seq.landmarks_seq:
             return RunningMetrics()
@@ -377,7 +390,7 @@ class RunningMetricsCalculator:
 
         # Step 1: Per-frame metrics
         for pl in seq.landmarks_seq:
-            fm = self._compute_frame_metrics(pl)
+            fm = self._compute_frame_metrics(pl, profile=profile)
             if fm is not None:
                 metrics.frame_metrics.append(fm)
 
@@ -424,7 +437,9 @@ class RunningMetricsCalculator:
     # ----------------------------------------------------------------
     # Per-frame computation
     # ----------------------------------------------------------------
-    def _compute_frame_metrics(self, pl: PoseLandmarks) -> Optional[FrameMetrics]:
+    def _compute_frame_metrics(self, pl: PoseLandmarks,
+                                profile: Optional[RunnerProfile] = None
+                                ) -> Optional[FrameMetrics]:
         """Compute all metrics for a single frame using body-centered coordinates."""
         try:
             lm = pl.landmarks
@@ -448,9 +463,12 @@ class RunningMetricsCalculator:
             mid_shoulder = _midpoint(lm[L["L_SHOULDER"]], lm[L["R_SHOULDER"]])
             mid_hip = _midpoint(lm[L["L_HIP"]], lm[L["R_HIP"]])
 
-            # px_to_cm from torso height (avg torso ~50cm in real world)
+            # px_to_cm from torso height
+            # If profile has height, use it for accurate scaling (torso ~30% of height)
+            # Otherwise fall back to 50cm (approx average adult torso)
+            torso_real_cm = profile.estimated_torso_cm if profile else 50.0
             torso_px = np.linalg.norm(mid_shoulder[:2] - mid_hip[:2])
-            fm.px_to_cm = 50.0 / torso_px if torso_px > 10 else 1.0
+            fm.px_to_cm = torso_real_cm / torso_px if torso_px > 10 else 1.0
 
             # --- Trunk Lean (body-relative) ---
             trunk_vec = mid_shoulder[:2] - mid_hip[:2]
@@ -884,26 +902,26 @@ class RunningMetricsCalculator:
     # ----------------------------------------------------------------
     # Scoring system (v2)
     # ----------------------------------------------------------------
-    def get_scoring(self, metrics: RunningMetrics) -> Dict:
+    def get_scoring(self, metrics: RunningMetrics,
+                     profile: Optional[RunnerProfile] = None) -> Dict:
         """
         Score each metric 0-100 and compute overall Running Form Score.
         
-        v2 improvements:
-          - Sigmoid-based smooth scoring (no step functions)
-          - Wider acceptable ranges with smooth penalties
-          - Ground contact time scoring
-          - Hip drop scoring
-          - Trunk lean direction awareness
-          - Foot strike type bonus
-          - Better documentation of scoring rationale
+        Uses runner profile (height, gender, age) to adjust scoring.
         """
         score_map = {}
         details = {}
 
-        # Cadence: optimal ~175 spm
-        # σ=12: 163-187→>80, 150-200→>50, 140→~30, 210→~20
+        # Cadence: optimal ~175 spm, adjusted by height
+        # Taller runners naturally have lower cadence
+        # 165cm → width 10, 175cm → width 12, 190cm → width 14
         if metrics.cadence_avg:
-            score_map["cadence"] = _sigmoid_score(metrics.cadence_avg, center=175, width=12)
+            cadence_width = 12
+            if profile and profile.height_cm:
+                # Scale width by height
+                cadence_width = round(8 + profile.height_cm / 170.0 * 4, 1)
+            score_map["cadence"] = _sigmoid_score(
+                metrics.cadence_avg, center=175, width=cadence_width)
             details["cadence"] = f"{metrics.cadence_avg:.0f} spm"
 
         # Trunk lean: optimal 4-10° forward
