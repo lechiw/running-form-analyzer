@@ -21,6 +21,9 @@ from fatigue_analyzer import FatigueAnalyzer, format_fatigue_report
 st.set_page_config(page_title="🏃 Running Form Analyzer", page_icon="🏃",
                    layout="wide", initial_sidebar_state="expanded")
 
+# Import comparison module
+from comparison import compare_analyses, format_comparison_report, comparison_to_dict
+
 OUTPUT_DIR = Path(__file__).parent / "output"
 OUTPUT_DIR.mkdir(exist_ok=True)
 
@@ -56,6 +59,10 @@ li {{ margin: 4px 0; }}
 def _sidebar():
     with st.sidebar:
         st.header("⚙️ 分析设置")
+        
+        # Mode selection
+        mode = st.radio("工作模式", ["单次分析", "前后对比"], horizontal=True)
+        
         stride = st.slider("采样步长", 1, 5, 2)
         max_frames = st.number_input("最大帧数", 0, 3000, 0, step=100, help="0=全部")
         render_video = st.checkbox("🎬 生成可视化视频", True)
@@ -70,7 +77,7 @@ def _sidebar():
                 st.success(f"✅ {llm_provider} API 已连接")
             else:
                 st.warning("⚠️ API 未配置，使用模板报告")
-    return stride, max_frames, render_video, do_fatigue, llm_provider
+    return mode, stride, max_frames, render_video, do_fatigue, llm_provider
 
 
 # ── Analysis pipeline ──────────────────────────
@@ -139,11 +146,12 @@ def _run_analysis(video_path, stride, max_frames, render, do_fatigue, llm_provid
 
 
 # ── Display results ────────────────────────────
-def _display(r):
+def _display(r, show_header=True):
     if "error" in r:
         return
-    st.divider()
-    st.header("📊 分析结果")
+    if show_header:
+        st.divider()
+        st.header("📊 分析结果")
     a, b, c = st.columns(3)
     a.metric("处理帧数", r.get("total_frames", "N/A"))
     score = r.get("scoring", {}).get("overall_score")
@@ -219,52 +227,182 @@ def _display(r):
             st.video(vp, format="video/mp4")
 
 
+# ── Comparison display ─────────────────────────
+def _display_comparison(cr):
+    """Display comparison results."""
+    st.divider()
+    st.header("📊 前后对比结果")
+    
+    st.caption(f"{cr.before_label}  →  {cr.after_label}")
+    
+    if cr.score_delta is not None:
+        delta_str = f"▲ {cr.score_delta:+.1f}" if cr.score_delta > 0 else f"▼ {cr.score_delta:.1f}"
+        col1, col2, col3 = st.columns(3)
+        col1.metric("训练前评分", f"{cr.score_before:.0f}")
+        col3.metric("训练后评分", f"{cr.score_after:.0f}", delta=delta_str)
+    
+    # Metric table
+    st.subheader("各指标变化")
+    cols = st.columns(len(cr.deltas))
+    for i, d in enumerate(cr.deltas):
+        if d.before_value is None and d.after_value is None:
+            continue
+        delta_display = None
+        if d.delta is not None and abs(d.delta) > 0.01:
+            delta_display = f"{'▲' if d.is_improvement else '▼'} {abs(d.delta):.1f}"
+        cols[i].metric(
+            d.label,
+            f"{d.after_value:.1f} →" if d.after_value is not None else "N/A",
+            delta=delta_display,
+        )
+    
+    # Insights
+    if cr.insights:
+        st.subheader("💡 分析结论")
+        for insight in cr.insights:
+            st.markdown(insight)
+    
+    # Full report
+    with st.expander("📋 完整对比报告（可下载）"):
+        report_text = format_comparison_report(cr)
+        st.text(report_text)
+        st.download_button(
+            "📥 下载对比报告",
+            data=report_text,
+            file_name="running_form_comparison.txt",
+            mime="text/plain",
+            use_container_width=True,
+        )
+
+
 # ── Main ───────────────────────────────────────
 def main():
     st.title("🏃 Running Form Analyzer")
     st.markdown("上传跑步视频，AI 自动分析跑姿并生成报告")
 
-    stride, max_frames, render_video, do_fatigue, llm_provider = _sidebar()
+    mode, stride, max_frames, render_video, do_fatigue, llm_provider = _sidebar()
 
     if "results" not in st.session_state:
         st.session_state.results = None
     if "video_file" not in st.session_state:
         st.session_state.video_file = None
+    if "compare_before" not in st.session_state:
+        st.session_state.compare_before = None
+    if "compare_after" not in st.session_state:
+        st.session_state.compare_after = None
+    if "comparison_result" not in st.session_state:
+        st.session_state.comparison_result = None
 
-    uploaded = st.file_uploader("选择跑步视频",
-                                type=["mp4", "mov", "avi", "mkv", "webm"])
+    provider = llm_provider if llm_provider != "template" else None
 
-    if uploaded is not None:
-        # Save uploaded file to stable location
-        ext = Path(uploaded.name).suffix
-        stable = str(OUTPUT_DIR / f"upload{ext}")
-        with open(stable, "wb") as f:
-            f.write(uploaded.getbuffer())
-        st.session_state.video_file = stable
-
-        if st.session_state.results is None:
-            st.session_state.results = None  # fresh upload, clear old
-
-        # Centered preview
-        _, col, _ = st.columns([1, 2, 1])
-        with col:
-            if os.path.exists(stable):
-                st.video(stable)
-
-        # Analyze button
-        _, btn, _ = st.columns([1, 2, 1])
-        with btn:
-            if st.button("🚀 开始分析", type="primary", use_container_width=True):
-                with st.spinner("分析中，请稍候..."):
-                    st.session_state.results = _run_analysis(
-                        stable, stride,
-                        max_frames if max_frames > 0 else None,
-                        render_video, do_fatigue,
-                        llm_provider if llm_provider != "template" else None,
+    if mode == "前后对比":
+        st.subheader("📹 上传跑姿视频")
+        st.caption("两侧使用相同的拍摄设置（同一机位、相同距离），结果最准确")
+        
+        c1, c2 = st.columns(2)
+        with c1:
+            st.markdown("**🏋️ 训练前**")
+            before_file = st.file_uploader(
+                "选择训练前视频", type=["mp4", "mov", "avi", "mkv", "webm"],
+                key="before_upload")
+            if before_file is not None:
+                ext = Path(before_file.name).suffix
+                bpath = str(OUTPUT_DIR / f"before{ext}")
+                with open(bpath, "wb") as f:
+                    f.write(before_file.getbuffer())
+                st.session_state.compare_before = bpath
+                st.video(bpath)
+        
+        with c2:
+            st.markdown("**🏃 训练后**")
+            after_file = st.file_uploader(
+                "选择训练后视频", type=["mp4", "mov", "avi", "mkv", "webm"],
+                key="after_upload")
+            if after_file is not None:
+                ext = Path(after_file.name).suffix
+                apath = str(OUTPUT_DIR / f"after{ext}")
+                with open(apath, "wb") as f:
+                    f.write(after_file.getbuffer())
+                st.session_state.compare_after = apath
+                st.video(apath)
+        
+        # Analyze buttons
+        col1, col2, col3 = st.columns([1, 1, 1])
+        with col1:
+            if st.button("🚀 分析训练前", type="primary", use_container_width=True):
+                if st.session_state.compare_before and os.path.exists(st.session_state.compare_before):
+                    with st.spinner("分析训练前视频..."):
+                        st.session_state.before_result = _run_analysis(
+                            st.session_state.compare_before, stride,
+                            max_frames if max_frames > 0 else None,
+                            render_video, do_fatigue, provider)
+        with col2:
+            if st.button("🚀 分析训练后", type="primary", use_container_width=True):
+                if st.session_state.compare_after and os.path.exists(st.session_state.compare_after):
+                    with st.spinner("分析训练后视频..."):
+                        st.session_state.after_result = _run_analysis(
+                            st.session_state.compare_after, stride,
+                            max_frames if max_frames > 0 else None,
+                            render_video, do_fatigue, provider)
+        with col3:
+            has_both = (st.session_state.get("before_result") 
+                        and st.session_state.get("after_result"))
+            if st.button("📊 生成对比", type="secondary",
+                         use_container_width=True, disabled=not has_both):
+                if has_both:
+                    b = st.session_state.before_result
+                    a = st.session_state.after_result
+                    b_metrics = {**b.get("metrics", {}), "overall_score": b.get("scoring", {}).get("overall_score")}
+                    a_metrics = {**a.get("metrics", {}), "overall_score": a.get("scoring", {}).get("overall_score")}
+                    st.session_state.comparison_result = compare_analyses(
+                        b_metrics, a_metrics,
+                        label_before="训练前",
+                        label_after="训练后",
                     )
+        
+        # Show individual results
+        if st.session_state.get("before_result"):
+            with st.expander("训练前分析结果", expanded=False):
+                _display(st.session_state.before_result, show_header=False)
+        if st.session_state.get("after_result"):
+            with st.expander("训练后分析结果", expanded=False):
+                _display(st.session_state.after_result, show_header=False)
+        
+        # Show comparison
+        if st.session_state.comparison_result:
+            _display_comparison(st.session_state.comparison_result)
+    
+    else:
+        # Single analysis mode (original)
+        uploaded = st.file_uploader("选择跑步视频",
+                                    type=["mp4", "mov", "avi", "mkv", "webm"])
 
-    if st.session_state.results:
-        _display(st.session_state.results)
+        if uploaded is not None:
+            ext = Path(uploaded.name).suffix
+            stable = str(OUTPUT_DIR / f"upload{ext}")
+            with open(stable, "wb") as f:
+                f.write(uploaded.getbuffer())
+            st.session_state.video_file = stable
+
+            if st.session_state.results is None:
+                st.session_state.results = None
+
+            _, col, _ = st.columns([1, 2, 1])
+            with col:
+                if os.path.exists(stable):
+                    st.video(stable)
+
+            _, btn, _ = st.columns([1, 2, 1])
+            with btn:
+                if st.button("🚀 开始分析", type="primary", use_container_width=True):
+                    with st.spinner("分析中，请稍候..."):
+                        st.session_state.results = _run_analysis(
+                            stable, stride,
+                            max_frames if max_frames > 0 else None,
+                            render_video, do_fatigue, provider)
+
+        if st.session_state.results:
+            _display(st.session_state.results)
 
 
 if __name__ == "__main__":
