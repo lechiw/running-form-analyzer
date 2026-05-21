@@ -2,6 +2,8 @@
 
 AI 跑姿分析工具——上传跑步视频，自动提取骨架、计算生物力学指标、生成分析报告。
 
+[![CI](https://github.com/lechiw/running-form-analyzer/actions/workflows/tests.yml/badge.svg)](https://github.com/lechiw/running-form-analyzer/actions/workflows/tests.yml)
+
 > 🧠 **想了解跑姿背后的原理？** 请阅读 [THEORY.md](THEORY.md) — 用大白话讲清楚每个指标为什么重要、怎么算的、准不准。
 >
 > 🏆 **想看精英跑者的真实数据？** 请阅读 [ELITE_RUNNER_DATA.md](ELITE_RUNNER_DATA.md) — 男子/女子马拉松历史 Top 10 选手成绩、跑姿数据、精英 vs 业余对比。

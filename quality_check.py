@@ -8,6 +8,7 @@ from typing import List, Dict, Tuple, Optional
 from dataclasses import dataclass
 from pose_extractor import PoseSequence, PoseLandmarks
 from metrics import L as LM, _midpoint
+from preprocess import is_portrait_video, describe_orientation
 
 
 @dataclass
@@ -27,6 +28,10 @@ class QualityReport:
     summary: str  # One-line summary
     issues: List[str]  # List of issues to fix
     tips: List[str]  # Shooting tips
+
+    # Orientation
+    is_portrait: bool  # Whether video is portrait/vertical
+    portrait_orientation: Optional[str]  # Description of orientation
 
     # Guidance
     shooting_guide: str  # Full guidance text
@@ -73,8 +78,8 @@ SHOOTING_GUIDE = """
 class VideoQualityChecker:
     """Check if a video is suitable for running form analysis."""
 
-    def __init__(self):
-        pass
+    def __init__(self, video_path: Optional[str] = None):
+        self.video_path = video_path
 
     def check(self, seq: PoseSequence, sample_frames: int = 10) -> QualityReport:
         """
@@ -90,6 +95,16 @@ class VideoQualityChecker:
         issues = []
         tips = []
         checks = {}
+
+        # Check 0: Video orientation (portrait vs landscape)
+        is_portrait = False
+        portrait_desc = None
+        if self.video_path and is_portrait_video(self.video_path):
+            is_portrait = True
+            portrait_desc = describe_orientation(self.video_path)
+            issues.append(f"竖屏视频 ({portrait_desc}) — 横向视野窄，跑步者手脚容易出画")
+            tips.append("建议使用横屏拍摄，确保能看到完整的步幅范围")
+            tips.append("或使用裁剪功能自动处理竖屏视频")
 
         # Need at least some pose data
         if len(seq.landmarks_seq) < 3:
@@ -207,6 +222,8 @@ class VideoQualityChecker:
             summary = "⚠️ 视频质量有待改善"
 
         return QualityReport(
+            is_portrait=is_portrait,
+            portrait_orientation=portrait_desc,
             passed=passed,
             score=score,
             is_side_view=is_side_view,
@@ -257,6 +274,11 @@ def print_quality_report(report: QualityReport) -> str:
     lines.append(report.summary)
     lines.append(f"   综合评分：{report.score}/100")
     lines.append("")
+    
+    if report.is_portrait:
+        lines.append(f"📱 检测到竖屏视频：{report.portrait_orientation}")
+        lines.append("   建议使用横屏拍摄以获得最佳分析效果")
+        lines.append("")
 
     if report.issues:
         lines.append("📋 发现的问题：")

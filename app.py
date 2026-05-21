@@ -17,6 +17,7 @@ from analyzer import AIRunningCoach
 from llm_client import create_llm_client
 from quality_check import VideoQualityChecker
 from fatigue_analyzer import FatigueAnalyzer, format_fatigue_report
+from preprocess import preprocess_video, is_portrait_video, describe_orientation
 
 st.set_page_config(page_title="🏃 Running Form Analyzer", page_icon="🏃",
                    layout="wide", initial_sidebar_state="expanded")
@@ -100,16 +101,30 @@ def _run_analysis(video_path, stride, max_frames, render, do_fatigue, llm_provid
     progress = st.progress(0, text="初始化...")
     res = {}
 
+    # Check and preprocess portrait videos
+    actual_video = video_path
+    if is_portrait_video(video_path):
+        orientation = describe_orientation(video_path)
+        progress.progress(5, text=f"📱 检测到{orientation}，正在裁剪优化...")
+        preprocessed = preprocess_video(video_path)
+        if preprocessed:
+            actual_video = preprocessed
+            res["preprocessed"] = True
+            res["original_orientation"] = orientation
+        else:
+            st.warning(f"检测到{orientation}，自动裁剪失败，将使用原始视频直接分析（精度可能受限）")
+            res["preprocessed"] = False
+
     progress.progress(10, text="📐 提取骨架...")
     extractor = PoseExtractor(model_complexity=1)
-    seq = extractor.extract_from_video(video_path, max_frames=max_frames, stride=stride)
+    seq = extractor.extract_from_video(actual_video, max_frames=max_frames, stride=stride)
     if not seq.landmarks_seq:
         st.error("❌ 未检测到人体骨架")
         return {"error": "No pose detected"}
     res["total_frames"] = len(seq.landmarks_seq)
 
     progress.progress(30, text="🎥 检查拍摄质量...")
-    qc = VideoQualityChecker()
+    qc = VideoQualityChecker(video_path=actual_video)
     qr = qc.check(seq)
     res["quality"] = {"passed": qr.passed, "score": qr.score, "summary": qr.summary,
                       "issues": qr.issues, "tips": qr.tips, "guide": qr.shooting_guide}
@@ -189,6 +204,12 @@ def _display(r, show_header=True):
                 st.download_button("📥 下载可视化视频", data=f.read(),
                     file_name="running_analysis_annotated.mp4", mime="video/mp4",
                     use_container_width=True)
+
+    # Show portrait preprocessing notice
+    if r.get("preprocessed"):
+        st.info(f"📱 检测到{r.get('original_orientation','竖屏视频')}，已自动裁剪为横屏格式以提高分析精度")
+    elif r.get("preprocessed") is False:
+        st.warning("📱 检测到竖屏视频，自动裁剪失败，部分指标可能不准确")
 
     q = r.get("quality", {})
     if q:
